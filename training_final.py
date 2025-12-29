@@ -246,9 +246,7 @@ class Trainer:
                 grad_norm = self._compute_grad_norm()
                 grad_norms.append(grad_norm)
             
-            predictions_unscaled = torch.expm1(predictions.detach().float())
-            targets_unscaled = torch.expm1(Y_batch.detach().float())
-            diff = predictions_unscaled - targets_unscaled
+            diff = predictions.detach().float() - Y_batch.detach().float()
             sse += torch.sum(diff ** 2).item()
             count += diff.numel()
             
@@ -293,9 +291,7 @@ class Trainer:
                 
                 total_loss += loss.item()
                 
-                predictions_unscaled = torch.expm1(predictions.detach().float())
-                targets_unscaled = torch.expm1(Y_batch.detach().float())
-                diff = predictions_unscaled - targets_unscaled
+                diff = predictions.detach().float() - Y_batch.detach().float()
                 sse += torch.sum(diff ** 2).item()
                 count += diff.numel()
         
@@ -380,8 +376,8 @@ class Trainer:
             self.history['grad_norm'].append(avg_grad_norm)
             
             # Print metrics
-            print(f"  Train Loss: {train_loss:.4f} | Train RMSE: {train_rmse:.4f}")
-            print(f"  Val Loss:   {val_loss:.4f} | Val RMSE:   {val_rmse:.4f}")
+            print(f"  Train Loss: {train_loss:.4f} | Train RMSE (log-space): {train_rmse:.4f}")
+            print(f"  Val Loss:   {val_loss:.4f} | Val RMSE (log-space):   {val_rmse:.4f}")
             print(f"  LR: {current_lr:.6f} | Grad Norm: {avg_grad_norm:.4f}")
             
             # Check for learning issues
@@ -434,11 +430,11 @@ class Trainer:
         axes[0, 0].grid(True, alpha=0.3)
         
         # RMSE
-        axes[0, 1].plot(self.history['train_rmse'], label='Train RMSE')
-        axes[0, 1].plot(self.history['val_rmse'], label='Val RMSE')
+        axes[0, 1].plot(self.history['train_rmse'], label='Train RMSE (log-space)')
+        axes[0, 1].plot(self.history['val_rmse'], label='Val RMSE (log-space)')
         axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('RMSE')
-        axes[0, 1].set_title(f'{self.model_name} - RMSE')
+        axes[0, 1].set_ylabel('RMSE (log-space)')
+        axes[0, 1].set_title(f'{self.model_name} - RMSE (log-space)')
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
         
