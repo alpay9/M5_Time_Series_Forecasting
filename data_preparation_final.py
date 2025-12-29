@@ -125,6 +125,10 @@ class M5DataPreprocessor:
         # Sort by id and date (critical for lag features)
         print("\nSorting data...")
         sales_long = sales_long.sort_values(["id", "date"]).reset_index(drop=True)
+
+        # Release large intermediate merge inputs
+        del calendar, sell_prices
+        gc.collect()
         
         print(f"\n✓ Merge complete")
         print(f"  Final shape: {sales_long.shape}")
@@ -246,6 +250,9 @@ class M5DataPreprocessor:
         category_totals = df.groupby(["cat_id", "date"], observed=True)["sales"].sum().rename("category_total_sales")
         df = df.merge(category_totals, on=["cat_id", "date"], how="left")
         df["category_total_sales"] = df["category_total_sales"].astype("float32")
+
+        del store_totals, category_totals
+        gc.collect()
         
         # Item percentage of store
         print("   - item_pct_of_store")
@@ -266,6 +273,8 @@ class M5DataPreprocessor:
         print(f"  Shape: {df.shape}")
         print(f"  Features created: {df.shape[1] - 8}")  # Minus metadata columns
         print(f"  Memory usage: {df.memory_usage(deep=True).sum() / 1e9:.2f} GB")
+
+        gc.collect()
         
         return df
     
@@ -275,7 +284,10 @@ class M5DataPreprocessor:
         df: pd.DataFrame, 
         input_length: int = 90,
         output_length: int = 28,
-        stride: int = 7
+        stride: int = 7,
+        series_batch_size: int = 500,
+        use_memmap: bool = True,
+        memmap_dir: str = "."
     ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame, List[str]]:
         """
         Create sliding window sequences with NaN removal.
@@ -301,6 +313,8 @@ class M5DataPreprocessor:
         print(f"   Before: {len(df):,} rows")
         
         df_clean = df.dropna(subset=feature_cols)
+        del df
+        gc.collect()
         
         print(f"   After:  {len(df_clean):,} rows")
         print(f"   Removed: {len(df) - len(df_clean):,} rows ({(len(df) - len(df_clean))/len(df)*100:.2f}%)")
@@ -310,33 +324,65 @@ class M5DataPreprocessor:
         print(f"   Input length: {input_length} days")
         print(f"   Output length: {output_length} days")
         
-        X_list = []
-        Y_list = []
-        series_id_list = []
-        
         series_ids = df_clean["id"].unique()
         print(f"   Processing {len(series_ids):,} series...")
-        
-        for idx, series_id in enumerate(series_ids):
-            if (idx + 1) % 1000 == 0:
-                print(f"   Progress: {idx + 1:,}/{len(series_ids):,} series")
-            
-            series_data = df_clean[df_clean["id"] == series_id].sort_values("date")
-            
-            features = series_data[feature_cols].values
-            targets = np.log1p(series_data["sales"].values)
-            
-            # Create sliding windows
-            for i in range(0, len(series_data) - input_length - output_length + 1, stride):
-                X_window = features[i:i + input_length]
-                Y_window = targets[i + input_length:i + input_length + output_length]
-                
-                X_list.append(X_window)
-                Y_list.append(Y_window)
-                series_id_list.append(series_id)
-        
-        X = np.array(X_list, dtype=np.float32)
-        Y = np.array(Y_list, dtype=np.float32)
+
+        series_lengths = df_clean.groupby("id", observed=True).size()
+        total_sequences = 0
+        for length in series_lengths:
+            max_start = length - input_length - output_length
+            if max_start >= 0:
+                total_sequences += (max_start // stride) + 1
+
+        print(f"   Total sequences to allocate: {total_sequences:,}")
+
+        series_id_list = np.empty(total_sequences, dtype=object)
+        if use_memmap:
+            X_path = f"{memmap_dir}/X_sequences.dat"
+            Y_path = f"{memmap_dir}/Y_sequences.dat"
+            X = np.memmap(
+                X_path,
+                dtype=np.float32,
+                mode="w+",
+                shape=(total_sequences, input_length, len(feature_cols))
+            )
+            Y = np.memmap(
+                Y_path,
+                dtype=np.float32,
+                mode="w+",
+                shape=(total_sequences, output_length)
+            )
+        else:
+            X = np.empty((total_sequences, input_length, len(feature_cols)), dtype=np.float32)
+            Y = np.empty((total_sequences, output_length), dtype=np.float32)
+
+        write_idx = 0
+        for batch_start in range(0, len(series_ids), series_batch_size):
+            batch_ids = series_ids[batch_start:batch_start + series_batch_size]
+            for idx, series_id in enumerate(batch_ids, start=batch_start):
+                if (idx + 1) % 1000 == 0:
+                    print(f"   Progress: {idx + 1:,}/{len(series_ids):,} series")
+
+                series_data = df_clean[df_clean["id"] == series_id].sort_values("date")
+                features = series_data[feature_cols].values
+                targets = np.log1p(series_data["sales"].values)
+
+                for i in range(0, len(series_data) - input_length - output_length + 1, stride):
+                    X[write_idx] = features[i:i + input_length]
+                    Y[write_idx] = targets[i + input_length:i + input_length + output_length]
+                    series_id_list[write_idx] = series_id
+                    write_idx += 1
+
+            gc.collect()
+
+        if use_memmap:
+            X.flush()
+            Y.flush()
+
+        if write_idx != total_sequences:
+            raise ValueError(
+                f"Sequence count mismatch: expected {total_sequences}, wrote {write_idx}"
+            )
         
         print(f"\n✓ Sequence creation complete")
         print(f"  X shape: {X.shape} (samples, timesteps, features)")
