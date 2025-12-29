@@ -128,7 +128,9 @@ class Trainer:
         lr=0.001,
         device='cuda',
         model_name='model',
-        precision='fp16'
+        precision='fp16',
+        grad_clip_max_norm=5.0,
+        grad_clip_enabled=True
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -173,6 +175,9 @@ class Trainer:
         self.scaler = None
         if self.precision == 'fp16' and device == 'cuda':
             self.scaler = GradScaler()
+
+        self.grad_clip_max_norm = grad_clip_max_norm
+        self.grad_clip_enabled = grad_clip_enabled
         
         self.history = {
             'train_loss': [],
@@ -196,6 +201,14 @@ class Trainer:
         if self.use_amp:
             return autocast(dtype=self.autocast_dtype)
         return contextlib.nullcontext()
+
+    def _clip_gradients(self):
+        if not self.grad_clip_enabled or self.grad_clip_max_norm is None:
+            return
+        torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            max_norm=self.grad_clip_max_norm
+        )
         
     def train_epoch(self):
         """Train for one epoch with mixed precision support."""
@@ -223,20 +236,20 @@ class Trainer:
                     
                     # Unscale before clipping
                     self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self._clip_gradients()
                     
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self._clip_gradients()
                     self.optimizer.step()
             else:
                 predictions = self.model(X_batch)
                 loss = self.criterion(predictions, Y_batch)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self._clip_gradients()
                 self.optimizer.step()
             
             total_loss += loss.item()
