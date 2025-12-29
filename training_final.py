@@ -246,8 +246,8 @@ class Trainer:
                 grad_norm = self._compute_grad_norm()
                 grad_norms.append(grad_norm)
             
-            predictions_all.append(predictions.detach().cpu().numpy())
-            targets_all.append(Y_batch.cpu().numpy())
+            predictions_all.append(predictions.detach().float().cpu().numpy())
+            targets_all.append(Y_batch.float().cpu().numpy())
             
             if batch_idx % postfix_interval == 0:
                 pbar.set_postfix({'loss': loss.item()})
@@ -295,8 +295,8 @@ class Trainer:
                 
                 total_loss += loss.item()
                 
-                predictions_all.append(predictions.cpu().numpy())
-                targets_all.append(Y_batch.cpu().numpy())
+                predictions_all.append(predictions.float().cpu().numpy())
+                targets_all.append(Y_batch.float().cpu().numpy())
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
@@ -328,8 +328,8 @@ class Trainer:
                 else:
                     predictions = self.model(X_batch)
                 
-                predictions_all.append(predictions.cpu().numpy())
-                targets_all.append(Y_batch.cpu().numpy())
+                predictions_all.append(predictions.float().cpu().numpy())
+                targets_all.append(Y_batch.float().cpu().numpy())
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
