@@ -202,26 +202,6 @@ class M5DataPreprocessor:
         # ============ ADVANCED FEATURES ============
         print("\n5. Creating advanced features...")
         
-        # Days since last sale
-        print("   - days_since_sale (this may take a few minutes...)")
-        df["days_since_sale"] = 0
-        for id_val in df["id"].unique():
-            mask = df["id"] == id_val
-            sales_series = df.loc[mask, "sales"].values
-            days_since = np.zeros(len(sales_series), dtype=np.int16)
-            
-            counter = 0
-            for i in range(len(sales_series)):
-                if sales_series[i] > 0:
-                    counter = 0
-                else:
-                    counter += 1
-                days_since[i] = counter
-            
-            df.loc[mask, "days_since_sale"] = days_since
-        
-        df["days_since_sale"] = df["days_since_sale"].astype("int16")
-        
         # Cumulative sales
         print("   - cumsum_7")
         df["cumsum_7"] = (
