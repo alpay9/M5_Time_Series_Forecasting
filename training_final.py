@@ -241,9 +241,11 @@ class Trainer:
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
+        predictions_unscaled = np.expm1(predictions_all)
+        targets_unscaled = np.expm1(targets_all)
         
         avg_loss = total_loss / len(self.train_loader)
-        rmse = np.sqrt(mean_squared_error(targets_all, predictions_all))
+        rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
         avg_grad_norm = np.mean(grad_norms) if grad_norms else 0
         
         return avg_loss, rmse, avg_grad_norm
@@ -275,9 +277,11 @@ class Trainer:
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
+        predictions_unscaled = np.expm1(predictions_all)
+        targets_unscaled = np.expm1(targets_all)
         
         avg_loss = total_loss / len(self.val_loader)
-        rmse = np.sqrt(mean_squared_error(targets_all, predictions_all))
+        rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
         
         return avg_loss, rmse, predictions_all, targets_all
     
@@ -306,8 +310,10 @@ class Trainer:
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
+        predictions_unscaled = np.expm1(predictions_all)
+        targets_unscaled = np.expm1(targets_all)
         
-        rmse = np.sqrt(mean_squared_error(targets_all, predictions_all))
+        rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
         
         return {
             'rmse': rmse,
