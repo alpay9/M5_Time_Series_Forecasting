@@ -191,8 +191,8 @@ class Trainer:
         
         pbar = tqdm(self.train_loader, desc='Training', leave=False)
         for batch_idx, (X_batch, Y_batch) in enumerate(pbar):
-            X_batch = X_batch.to(self.device)
-            Y_batch = Y_batch.to(self.device)
+            X_batch = X_batch.to(self.device, non_blocking=True)
+            Y_batch = Y_batch.to(self.device, non_blocking=True)
             
             self.optimizer.zero_grad()
             
@@ -259,8 +259,8 @@ class Trainer:
         
         with torch.no_grad():
             for X_batch, Y_batch in self.val_loader:
-                X_batch = X_batch.to(self.device)
-                Y_batch = Y_batch.to(self.device)
+                X_batch = X_batch.to(self.device, non_blocking=True)
+                Y_batch = Y_batch.to(self.device, non_blocking=True)
                 
                 if self.use_fp16:
                     with autocast():
@@ -296,8 +296,8 @@ class Trainer:
         
         with torch.no_grad():
             for X_batch, Y_batch in self.test_loader:
-                X_batch = X_batch.to(self.device)
-                Y_batch = Y_batch.to(self.device)
+                X_batch = X_batch.to(self.device, non_blocking=True)
+                Y_batch = Y_batch.to(self.device, non_blocking=True)
                 
                 if self.use_fp16:
                     with autocast():
