@@ -513,11 +513,16 @@ class AutoCorrelation(nn.Module):
         # Aggregate values based on correlations
         out = torch.zeros_like(V)
         for i in range(top_k):
-            delay = top_indices[:, :, i].unsqueeze(-1).unsqueeze(-1)
-            w = weights[:, :, i:i+1].unsqueeze(-1)
+            delay = top_indices[:, :, i]
+            w = weights[:, :, i].unsqueeze(-1).unsqueeze(-1)
+            indices = (
+                torch.arange(seq_len, device=V.device).view(1, 1, seq_len)
+                - delay.unsqueeze(-1)
+            ).remainder(seq_len)
+            shifted_V = V.gather(2, indices.unsqueeze(-1).expand(-1, -1, -1, self.d_k))
             
-            # Simple weighted aggregation (simplified from paper)
-            out = out + w * V
+            # Delay-aware weighted aggregation
+            out = out + w * shifted_V
         
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
         out = self.out_proj(out)
