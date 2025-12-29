@@ -323,7 +323,7 @@ class M5DataPreprocessor:
             series_data = df_clean[df_clean["id"] == series_id].sort_values("date")
             
             features = series_data[feature_cols].values
-            targets = series_data["sales"].values
+            targets = np.log1p(series_data["sales"].values)
             
             # Create sliding windows
             for i in range(0, len(series_data) - input_length - output_length + 1, stride):
