@@ -205,7 +205,8 @@ class Trainer:
         targets_all = []
         grad_norms = []
         
-        pbar = tqdm(self.train_loader, desc='Training', leave=False)
+        pbar = tqdm(self.train_loader, desc='Training', leave=False, mininterval=5)
+        postfix_interval = 100
         for batch_idx, (X_batch, Y_batch) in enumerate(pbar):
             X_batch = X_batch.to(self.device, non_blocking=True)
             Y_batch = Y_batch.to(self.device, non_blocking=True)
@@ -248,7 +249,8 @@ class Trainer:
             predictions_all.append(predictions.detach().cpu().numpy())
             targets_all.append(Y_batch.cpu().numpy())
             
-            pbar.set_postfix({'loss': loss.item()})
+            if batch_idx % postfix_interval == 0:
+                pbar.set_postfix({'loss': loss.item()})
             
             # DIAGNOSTIC: Check for constant predictions (first batch of first epoch)
             if batch_idx == 0:
