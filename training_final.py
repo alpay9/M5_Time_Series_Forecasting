@@ -6,7 +6,7 @@ Fixes applied:
 - Improved early stopping with min_delta
 - Better learning rate scheduling
 - Gradient monitoring
-- FP16 mixed precision support built-in
+- Mixed precision support built-in (FP16/BF16)
 - Better logging
 - Diagnostic outputs
 
@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import GradScaler, autocast
+import contextlib
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -115,7 +116,7 @@ class EarlyStopping:
 class Trainer:
     """
     Handles model training, validation, and testing.
-    FIXED: Improved LR scheduling, gradient monitoring, FP16 support.
+    FIXED: Improved LR scheduling, gradient monitoring, mixed precision support.
     """
     
     def __init__(
@@ -127,7 +128,7 @@ class Trainer:
         lr=0.001,
         device='cuda',
         model_name='model',
-        use_fp16=True
+        precision='fp16'
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -135,7 +136,16 @@ class Trainer:
         self.test_loader = test_loader
         self.device = device
         self.model_name = model_name
-        self.use_fp16 = use_fp16 and device == 'cuda'
+        normalized_precision = precision.lower()
+        if normalized_precision not in {'fp32', 'fp16', 'bf16'}:
+            raise ValueError(f"Unsupported precision '{precision}'. Use 'fp32', 'fp16', or 'bf16'.")
+        self.precision = normalized_precision
+        self.use_amp = device == 'cuda' and self.precision in {'fp16', 'bf16'}
+        self.autocast_dtype = None
+        if self.precision == 'fp16':
+            self.autocast_dtype = torch.float16
+        elif self.precision == 'bf16':
+            self.autocast_dtype = torch.bfloat16
         
         # Optimizer with weight decay
         self.optimizer = torch.optim.AdamW(
@@ -160,7 +170,8 @@ class Trainer:
         )
         
         # Mixed precision scaler
-        if self.use_fp16:
+        self.scaler = None
+        if self.precision == 'fp16' and device == 'cuda':
             self.scaler = GradScaler()
         
         self.history = {
@@ -180,9 +191,14 @@ class Trainer:
                 param_norm = p.grad.data.norm(2)
                 total_norm += param_norm.item() ** 2
         return total_norm ** 0.5
+
+    def _autocast_context(self):
+        if self.use_amp:
+            return autocast(dtype=self.autocast_dtype)
+        return contextlib.nullcontext()
         
     def train_epoch(self):
-        """Train for one epoch with FP16 support."""
+        """Train for one epoch with mixed precision support."""
         self.model.train()
         total_loss = 0
         predictions_all = []
@@ -196,19 +212,24 @@ class Trainer:
             
             self.optimizer.zero_grad()
             
-            if self.use_fp16:
-                with autocast():
+            if self.use_amp:
+                with self._autocast_context():
                     predictions = self.model(X_batch)
                     loss = self.criterion(predictions, Y_batch)
                 
-                self.scaler.scale(loss).backward()
-                
-                # Unscale before clipping
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    
+                    # Unscale before clipping
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self.optimizer.step()
             else:
                 predictions = self.model(X_batch)
                 loss = self.criterion(predictions, Y_batch)
@@ -262,8 +283,8 @@ class Trainer:
                 X_batch = X_batch.to(self.device)
                 Y_batch = Y_batch.to(self.device)
                 
-                if self.use_fp16:
-                    with autocast():
+                if self.use_amp:
+                    with self._autocast_context():
                         predictions = self.model(X_batch)
                         loss = self.criterion(predictions, Y_batch)
                 else:
@@ -299,8 +320,8 @@ class Trainer:
                 X_batch = X_batch.to(self.device)
                 Y_batch = Y_batch.to(self.device)
                 
-                if self.use_fp16:
-                    with autocast():
+                if self.use_amp:
+                    with self._autocast_context():
                         predictions = self.model(X_batch)
                 else:
                     predictions = self.model(X_batch)
@@ -326,7 +347,7 @@ class Trainer:
         print(f"\n{'='*80}")
         print(f"TRAINING: {self.model_name}")
         print(f"{'='*80}")
-        print(f"  FP16 enabled: {self.use_fp16}")
+        print(f"  Precision: {self.precision}")
         print(f"  Initial LR: {self.optimizer.param_groups[0]['lr']}")
         
         early_stopping = EarlyStopping(
