@@ -61,35 +61,26 @@ class WRMSSECalculator:
         This normalizes errors by the typical variation in each series.
         """
         print("\nCalculating scale factors...")
-        
-        self.scale_factors = {}
-        
-        # Group by series ID
-        for series_id in self.df['id'].unique():
-            series_data = self.df[self.df['id'] == series_id].sort_values('date')
-            
-            # Get training period sales
-            if self.train_end_day:
-                sales = series_data.iloc[:self.train_end_day]['sales'].values
-            else:
-                # Use first 70% as training
-                n_train = int(len(series_data) * 0.7)
-                sales = series_data.iloc[:n_train]['sales'].values
-            
-            # Calculate first differences
-            if len(sales) > 1:
-                diffs = np.abs(np.diff(sales.astype(np.float64)))
-                # Scale = mean of absolute differences
-                scale = np.mean(diffs) if len(diffs) > 0 else 1.0
-            else:
-                scale = 1.0
-            
-            # Minimum scale to avoid division issues
-            scale = max(scale, 0.1)
-            
-            self.scale_factors[series_id] = scale
-        
-        scale_values = list(self.scale_factors.values())
+
+        df_sorted = self.df.sort_values(['id', 'date'])
+        series_index = df_sorted.groupby('id').cumcount()
+
+        if self.train_end_day:
+            training_mask = series_index < self.train_end_day
+        else:
+            series_sizes = df_sorted.groupby('id')['sales'].transform('size')
+            n_train = (series_sizes * 0.7).astype(int)
+            training_mask = series_index < n_train
+
+        training_df = df_sorted.loc[training_mask]
+
+        diffs = training_df.groupby('id')['sales'].diff().abs()
+        scale_series = diffs.groupby(training_df['id']).mean()
+        scale_series = scale_series.fillna(1.0).clip(lower=0.1)
+
+        self.scale_factors = scale_series.to_dict()
+
+        scale_values = list(scale_series.values)
         print(f"  ✓ Calculated scale factors for {len(self.scale_factors)} series")
         print(f"  Scale factor range: [{min(scale_values):.4f}, {max(scale_values):.4f}]")
         print(f"  Scale factor mean: {np.mean(scale_values):.4f}")
