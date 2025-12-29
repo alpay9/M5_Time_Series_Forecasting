@@ -452,16 +452,40 @@ class M5DataPreprocessor:
         train_indices = []
         val_indices = []
         test_indices = []
-        
-        for series_id in unique_series_ids:
-            series_indices = np.where(series_id_array == series_id)[0]
-            n_series_samples = len(series_indices)
-            train_size = int(n_series_samples * train_ratio)
-            val_size = int(n_series_samples * val_ratio)
-            
-            train_indices.extend(series_indices[:train_size])
-            val_indices.extend(series_indices[train_size:train_size + val_size])
-            test_indices.extend(series_indices[train_size + val_size:])
+
+        boundaries = np.flatnonzero(series_id_array[1:] != series_id_array[:-1]) + 1
+        group_starts = np.r_[0, boundaries]
+        group_ends = np.r_[boundaries, len(series_id_array)]
+        is_grouped = len(unique_series_ids) == len(group_starts)
+
+        if is_grouped:
+            for start, end in zip(group_starts, group_ends):
+                n_series_samples = end - start
+                train_size = int(n_series_samples * train_ratio)
+                val_size = int(n_series_samples * val_ratio)
+
+                train_indices.append(np.arange(start, start + train_size))
+                val_indices.append(
+                    np.arange(start + train_size, start + train_size + val_size)
+                )
+                test_indices.append(
+                    np.arange(start + train_size + val_size, end)
+                )
+        else:
+            grouped_indices = pd.Series(series_id_array).groupby(series_id_array).indices
+            for series_indices in grouped_indices.values():
+                series_indices = np.asarray(series_indices)
+                n_series_samples = len(series_indices)
+                train_size = int(n_series_samples * train_ratio)
+                val_size = int(n_series_samples * val_ratio)
+
+                train_indices.append(series_indices[:train_size])
+                val_indices.append(series_indices[train_size:train_size + val_size])
+                test_indices.append(series_indices[train_size + val_size:])
+
+        train_indices = np.concatenate(train_indices) if train_indices else np.array([], dtype=int)
+        val_indices = np.concatenate(val_indices) if val_indices else np.array([], dtype=int)
+        test_indices = np.concatenate(test_indices) if test_indices else np.array([], dtype=int)
         
         X_train = X[train_indices]
         Y_train = Y[train_indices]
