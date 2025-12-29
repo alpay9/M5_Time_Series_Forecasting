@@ -148,31 +148,23 @@ class WRMSSECalculator:
         Returns:
             Dictionary of series_id -> RMSSE
         """
+        squared_errors = (predictions.astype(np.float64) - actuals.astype(np.float64)) ** 2
+        per_sample_mse = np.mean(squared_errors, axis=1)
+
+        unique_series, inverse = np.unique(series_ids, return_inverse=True)
+        series_error_sums = np.bincount(inverse, weights=per_sample_mse)
+        series_counts = np.bincount(inverse)
+
         rmsse_dict = {}
-        
-        unique_series = np.unique(series_ids)
-        
-        for series_id in unique_series:
-            # Get predictions/actuals for this series
-            mask = series_ids == series_id
-            series_preds = predictions[mask].astype(np.float64)
-            series_actuals = actuals[mask].astype(np.float64)
-            
-            if len(series_preds) == 0:
+
+        for series_id, error_sum, count in zip(unique_series, series_error_sums, series_counts):
+            if count == 0:
                 continue
-            
-            # Calculate RMSE
-            squared_errors = (series_preds - series_actuals) ** 2
-            rmse = np.sqrt(np.mean(squared_errors))
-            
-            # Get scale factor
+
+            rmse = np.sqrt(error_sum / count)
             scale = self.scale_factors.get(series_id, 1.0)
-            
-            # Calculate RMSSE
-            rmsse = rmse / scale
-            
-            rmsse_dict[series_id] = rmsse
-        
+            rmsse_dict[series_id] = rmse / scale
+
         return rmsse_dict
     
     
