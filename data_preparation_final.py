@@ -152,13 +152,13 @@ class M5DataPreprocessor:
         for window in [7, 28]:
             print(f"   - rolling_mean_{window}, rolling_std_{window}")
             df[f"rolling_mean_{window}"] = (
-                df.groupby("id", observed=True)["lag_28"]
+                df.groupby("id", observed=True)["lag_1"]
                 .transform(lambda x: x.rolling(window, min_periods=1).mean())
                 .astype("float32")
             )
             
             df[f"rolling_std_{window}"] = (
-                df.groupby("id", observed=True)["lag_28"]
+                df.groupby("id", observed=True)["lag_1"]
                 .transform(lambda x: x.rolling(window, min_periods=1).std())
                 .astype("float32")
             )
