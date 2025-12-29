@@ -276,12 +276,12 @@ class M5DataPreprocessor:
         input_length: int = 90,
         output_length: int = 28,
         stride: int = 7
-    ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame, List[str]]:
         """
         Create sliding window sequences with NaN removal.
         
         Returns:
-            X, Y arrays, feature column names, and cleaned dataframe for WRMSSE
+            X, Y arrays, feature column names, cleaned dataframe for WRMSSE, and series IDs
         """
         print("\n" + "="*80)
         print("SEQUENCE CREATION")
@@ -312,6 +312,7 @@ class M5DataPreprocessor:
         
         X_list = []
         Y_list = []
+        series_id_list = []
         
         series_ids = df_clean["id"].unique()
         print(f"   Processing {len(series_ids):,} series...")
@@ -332,6 +333,7 @@ class M5DataPreprocessor:
                 
                 X_list.append(X_window)
                 Y_list.append(Y_window)
+                series_id_list.append(series_id)
         
         X = np.array(X_list, dtype=np.float32)
         Y = np.array(Y_list, dtype=np.float32)
@@ -341,7 +343,7 @@ class M5DataPreprocessor:
         print(f"  Y shape: {Y.shape} (samples, forecast_horizon)")
         print(f"  Total sequences: {len(X):,}")
         
-        return X, Y, feature_cols, df_clean
+        return X, Y, feature_cols, df_clean, series_id_list
     
     
     def normalize_features(
@@ -400,12 +402,13 @@ class M5DataPreprocessor:
         self, 
         X: np.ndarray, 
         Y: np.ndarray,
+        series_ids: List[str],
         train_ratio: float = 0.7,
         val_ratio: float = 0.15,
         test_ratio: float = 0.15
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Split data temporally (no shuffle for time series).
+        Split data temporally per series (no shuffle for time series).
         """
         print("\n" + "="*80)
         print("DATA SPLITTING")
@@ -413,18 +416,32 @@ class M5DataPreprocessor:
         
         assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
         
-        n_samples = len(X)
-        train_size = int(n_samples * train_ratio)
-        val_size = int(n_samples * val_ratio)
+        series_id_array = np.array(series_ids)
+        unique_series_ids = pd.unique(series_id_array)
+        print(f"  Splitting {len(unique_series_ids):,} series by time...")
         
-        X_train = X[:train_size]
-        Y_train = Y[:train_size]
+        train_indices = []
+        val_indices = []
+        test_indices = []
         
-        X_val = X[train_size:train_size + val_size]
-        Y_val = Y[train_size:train_size + val_size]
+        for series_id in unique_series_ids:
+            series_indices = np.where(series_id_array == series_id)[0]
+            n_series_samples = len(series_indices)
+            train_size = int(n_series_samples * train_ratio)
+            val_size = int(n_series_samples * val_ratio)
+            
+            train_indices.extend(series_indices[:train_size])
+            val_indices.extend(series_indices[train_size:train_size + val_size])
+            test_indices.extend(series_indices[train_size + val_size:])
         
-        X_test = X[train_size + val_size:]
-        Y_test = Y[train_size + val_size:]
+        X_train = X[train_indices]
+        Y_train = Y[train_indices]
+        
+        X_val = X[val_indices]
+        Y_val = Y[val_indices]
+        
+        X_test = X[test_indices]
+        Y_test = Y[test_indices]
         
         print(f"\nSplit sizes:")
         print(f"  Train: {len(X_train):,} samples ({train_ratio*100:.0f}%)")
@@ -463,7 +480,7 @@ def main():
     df = preprocessor.create_features(df)
     
     # Create sequences
-    X, Y, feature_cols, df_clean = preprocessor.create_sequences(
+    X, Y, feature_cols, df_clean, series_ids = preprocessor.create_sequences(
         df,
         input_length=90,
         output_length=28,
@@ -471,7 +488,11 @@ def main():
     )
     
     # Split data
-    X_train, Y_train, X_val, Y_val, X_test, Y_test = preprocessor.split_data(X, Y)
+    X_train, Y_train, X_val, Y_val, X_test, Y_test = preprocessor.split_data(
+        X,
+        Y,
+        series_ids
+    )
     
     # Normalize
     X_train, X_val, X_test = preprocessor.normalize_features(X_train, X_val, X_test)
