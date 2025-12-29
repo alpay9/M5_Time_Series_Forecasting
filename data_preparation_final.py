@@ -290,15 +290,15 @@ class M5DataPreprocessor:
         
         # ============ REMOVE NaN ROWS ============
         print(f"\n1. Removing rows with NaN values...")
-        original_rows = len(df)
-        print(f"   Before: {original_rows:,} rows")
+        original_row_count = len(df)
+        print(f"   Before: {original_row_count:,} rows")
         
         df_clean = df.dropna(subset=feature_cols)
         del df
         gc.collect()
         
-        removed_rows = original_rows - len(df_clean)
-        removed_pct = (removed_rows / original_rows * 100) if original_rows else 0.0
+        removed_rows = original_row_count - len(df_clean)
+        removed_pct = (removed_rows / original_row_count * 100) if original_row_count else 0.0
         print(f"   After:  {len(df_clean):,} rows")
         print(f"   Removed: {removed_rows:,} rows ({removed_pct:.2f}%)")
         
