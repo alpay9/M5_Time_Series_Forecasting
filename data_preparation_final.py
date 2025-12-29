@@ -290,14 +290,17 @@ class M5DataPreprocessor:
         
         # ============ REMOVE NaN ROWS ============
         print(f"\n1. Removing rows with NaN values...")
-        print(f"   Before: {len(df):,} rows")
+        original_rows = len(df)
+        print(f"   Before: {original_rows:,} rows")
         
         df_clean = df.dropna(subset=feature_cols)
         del df
         gc.collect()
         
+        removed_rows = original_rows - len(df_clean)
+        removed_pct = (removed_rows / original_rows * 100) if original_rows else 0.0
         print(f"   After:  {len(df_clean):,} rows")
-        print(f"   Removed: {len(df) - len(df_clean):,} rows ({(len(df) - len(df_clean))/len(df)*100:.2f}%)")
+        print(f"   Removed: {removed_rows:,} rows ({removed_pct:.2f}%)")
         
         # ============ CREATE SEQUENCES ============
         print(f"\n2. Creating sequences with stride={stride}...")
