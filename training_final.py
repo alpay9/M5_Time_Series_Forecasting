@@ -201,8 +201,8 @@ class Trainer:
         """Train for one epoch with mixed precision support."""
         self.model.train()
         total_loss = 0
-        predictions_all = []
-        targets_all = []
+        sse = 0.0
+        count = 0
         grad_norms = []
         
         pbar = tqdm(self.train_loader, desc='Training', leave=False, mininterval=5)
@@ -246,8 +246,11 @@ class Trainer:
                 grad_norm = self._compute_grad_norm()
                 grad_norms.append(grad_norm)
             
-            predictions_all.append(predictions.detach().float().cpu().numpy())
-            targets_all.append(Y_batch.float().cpu().numpy())
+            predictions_unscaled = torch.expm1(predictions.detach().float())
+            targets_unscaled = torch.expm1(Y_batch.detach().float())
+            diff = predictions_unscaled - targets_unscaled
+            sse += torch.sum(diff ** 2).item()
+            count += diff.numel()
             
             if batch_idx % postfix_interval == 0:
                 pbar.set_postfix({'loss': loss.item()})
@@ -262,13 +265,8 @@ class Trainer:
                     print(f"     Pred range: [{pred_min:.4f}, {pred_max:.4f}]")
                     print(f"     Target range: [{Y_batch.min().item():.4f}, {Y_batch.max().item():.4f}]")
         
-        predictions_all = np.concatenate(predictions_all)
-        targets_all = np.concatenate(targets_all)
-        predictions_unscaled = np.expm1(predictions_all)
-        targets_unscaled = np.expm1(targets_all)
-        
         avg_loss = total_loss / len(self.train_loader)
-        rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
+        rmse = np.sqrt(sse / count) if count else 0
         avg_grad_norm = np.mean(grad_norms) if grad_norms else 0
         
         return avg_loss, rmse, avg_grad_norm
@@ -277,8 +275,8 @@ class Trainer:
         """Validate the model."""
         self.model.eval()
         total_loss = 0
-        predictions_all = []
-        targets_all = []
+        sse = 0.0
+        count = 0
         
         with torch.no_grad():
             for X_batch, Y_batch in self.val_loader:
@@ -295,18 +293,16 @@ class Trainer:
                 
                 total_loss += loss.item()
                 
-                predictions_all.append(predictions.float().cpu().numpy())
-                targets_all.append(Y_batch.float().cpu().numpy())
-        
-        predictions_all = np.concatenate(predictions_all)
-        targets_all = np.concatenate(targets_all)
-        predictions_unscaled = np.expm1(predictions_all)
-        targets_unscaled = np.expm1(targets_all)
+                predictions_unscaled = torch.expm1(predictions.detach().float())
+                targets_unscaled = torch.expm1(Y_batch.detach().float())
+                diff = predictions_unscaled - targets_unscaled
+                sse += torch.sum(diff ** 2).item()
+                count += diff.numel()
         
         avg_loss = total_loss / len(self.val_loader)
-        rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
+        rmse = np.sqrt(sse / count) if count else 0
         
-        return avg_loss, rmse, predictions_all, targets_all
+        return avg_loss, rmse, None, None
     
     def test(self):
         """Test the model and return predictions."""
