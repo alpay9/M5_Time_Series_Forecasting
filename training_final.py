@@ -358,6 +358,8 @@ class Trainer:
             verbose=True
         )
         best_val_loss = float('inf')
+        checkpoint_path = f'best_{self.model_name}.pt'
+        checkpoint_saved = False
         start_time = time.time()
         
         for epoch in range(epochs):
@@ -393,9 +395,12 @@ class Trainer:
                 print(f"  ⚠️ WARNING: Large gradients - consider reducing learning rate!")
             
             # Save best model
-            if val_loss < best_val_loss:
+            if not np.isfinite(val_loss):
+                print("  ⚠️ WARNING: Validation loss is NaN/inf; skipping checkpoint save.")
+            elif val_loss < best_val_loss:
                 best_val_loss = val_loss
-                torch.save(self.model.state_dict(), f'best_{self.model_name}.pt')
+                torch.save(self.model.state_dict(), checkpoint_path)
+                checkpoint_saved = True
                 print(f"  ✓ Saved best model (val_loss: {val_loss:.4f})")
             
             # Early stopping
@@ -410,8 +415,12 @@ class Trainer:
         print(f"Training completed in {training_time:.2f} seconds ({training_time/60:.1f} minutes)")
         print(f"{'='*80}")
         
-        # Load best model
-        self.model.load_state_dict(torch.load(f'best_{self.model_name}.pt'))
+        # Load best model if available; otherwise fall back to latest weights.
+        if checkpoint_saved:
+            self.model.load_state_dict(torch.load(checkpoint_path))
+        else:
+            print("  ⚠️ WARNING: No best checkpoint saved; using latest model weights.")
+            torch.save(self.model.state_dict(), checkpoint_path)
         
         return self.history, training_time
     
