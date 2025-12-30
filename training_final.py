@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import json
 import time
+import math
 from sklearn.metrics import mean_squared_error
 import os
 import sys
@@ -164,16 +165,10 @@ class Trainer:
         # Loss function - Huber is more robust than MSE
         self.criterion = nn.HuberLoss(delta=1.0)
         
-        # FIXED: Less aggressive LR scheduler
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',
-            factor=0.7,          # Less aggressive reduction
-            patience=7,          # Wait longer before reducing
-            min_lr=1e-6,
-            threshold=1e-4,      # Require meaningful improvement
-            threshold_mode='rel'
-        )
+        # Warmup + cosine decay scheduler (initialized in train once total steps are known)
+        self.scheduler = None
+        self.warmup_ratio = 0.1
+        self.scheduler_step_per_batch = True
         
         # Mixed precision scaler
         self.scaler = None
@@ -226,6 +221,23 @@ class Trainer:
             self.model.parameters(),
             max_norm=self.grad_clip_max_norm
         )
+
+    def _build_warmup_cosine_scheduler(self, total_steps):
+        warmup_steps = max(1, int(total_steps * self.warmup_ratio))
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return float(step + 1) / float(warmup_steps)
+            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+
+    def _step_scheduler(self):
+        if self.scheduler is None:
+            return
+        self.scheduler.step()
+        self.history['lr'].append(self.optimizer.param_groups[0]['lr'])
         
     def train_epoch(self):
         """Train for one epoch with mixed precision support."""
@@ -257,10 +269,14 @@ class Trainer:
                     
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
+                    if self.scheduler_step_per_batch:
+                        self._step_scheduler()
                 else:
                     loss.backward()
                     self._clip_gradients()
                     self.optimizer.step()
+                    if self.scheduler_step_per_batch:
+                        self._step_scheduler()
             else:
                 predictions = self.model(X_batch)
                 loss = self.criterion(predictions, Y_batch)
@@ -268,6 +284,8 @@ class Trainer:
                 loss.backward()
                 self._clip_gradients()
                 self.optimizer.step()
+                if self.scheduler_step_per_batch:
+                    self._step_scheduler()
             
             total_loss += loss.item()
             
@@ -391,6 +409,11 @@ class Trainer:
         checkpoint_path = f'best_{self.model_name}.pt'
         checkpoint_saved = False
         start_time = time.time()
+
+        steps_per_epoch = len(self.train_loader)
+        total_steps = max(1, steps_per_epoch * epochs)
+        self.scheduler = self._build_warmup_cosine_scheduler(total_steps)
+        self.history['lr'] = []
         
         for epoch in range(epochs):
             print(f"\nEpoch {epoch + 1}/{epochs}")
@@ -401,8 +424,6 @@ class Trainer:
             # Validate
             val_loss, val_rmse, _, _ = self.validate()
             
-            # Update learning rate
-            self.scheduler.step(val_loss)
             current_lr = self.optimizer.param_groups[0]['lr']
             
             # Store history
