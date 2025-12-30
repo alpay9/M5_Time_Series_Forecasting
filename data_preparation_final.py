@@ -406,6 +406,11 @@ class M5DataPreprocessor:
         
         print(f"\nFitting scaler on training data...")
         self.scaler.fit(X_train_reshaped)
+        zero_scale_mask = self.scaler.scale_ == 0
+        if np.any(zero_scale_mask):
+            zero_count = int(np.sum(zero_scale_mask))
+            print(f"  Warning: {zero_count} zero-scale feature(s) detected; setting scale to 1.0")
+            self.scaler.scale_[zero_scale_mask] = 1.0
         
         print(f"Transforming all datasets...")
         X_train_scaled = self.scaler.transform(X_train_reshaped)
