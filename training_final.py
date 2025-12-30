@@ -184,6 +184,7 @@ class Trainer:
             'train_rmse': [],
             'val_rmse': [],
             'lr': [],
+            'lr_steps': [],
             'grad_norm': []
         }
 
@@ -237,7 +238,7 @@ class Trainer:
         if self.scheduler is None:
             return
         self.scheduler.step()
-        self.history['lr'].append(self.optimizer.param_groups[0]['lr'])
+        self.history['lr_steps'].append(self.optimizer.param_groups[0]['lr'])
         
     def train_epoch(self):
         """Train for one epoch with mixed precision support."""
@@ -414,6 +415,7 @@ class Trainer:
         total_steps = max(1, steps_per_epoch * epochs)
         self.scheduler = self._build_warmup_cosine_scheduler(total_steps)
         self.history['lr'] = []
+        self.history['lr_steps'] = []
         
         for epoch in range(epochs):
             print(f"\nEpoch {epoch + 1}/{epochs}")
