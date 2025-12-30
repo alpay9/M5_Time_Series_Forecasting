@@ -259,9 +259,12 @@ class Trainer:
                 grad_norm = self._compute_grad_norm()
                 grad_norms.append(grad_norm)
             
-            diff = predictions.detach().float() - Y_batch.detach().float()
-            sse += torch.sum(diff ** 2).item()
-            count += diff.numel()
+            diff = (predictions.detach().cpu() - Y_batch.detach().cpu()).double()
+            if not torch.isfinite(diff).all():
+                print(f"  ⚠️ WARNING: Non-finite RMSE diff at batch {batch_idx}; skipping accumulation.")
+            else:
+                sse += torch.sum(diff ** 2).item()
+                count += diff.numel()
             
             if batch_idx % postfix_interval == 0:
                 pbar.set_postfix({'loss': loss.item()})
@@ -290,7 +293,7 @@ class Trainer:
         count = 0
         
         with torch.no_grad():
-            for X_batch, Y_batch in self.val_loader:
+            for batch_idx, (X_batch, Y_batch) in enumerate(self.val_loader):
                 X_batch = X_batch.to(self.device, non_blocking=True)
                 Y_batch = Y_batch.to(self.device, non_blocking=True)
                 
@@ -304,9 +307,12 @@ class Trainer:
                 
                 total_loss += loss.item()
                 
-                diff = predictions.detach().float() - Y_batch.detach().float()
-                sse += torch.sum(diff ** 2).item()
-                count += diff.numel()
+                diff = (predictions.detach().cpu() - Y_batch.detach().cpu()).double()
+                if not torch.isfinite(diff).all():
+                    print(f"  ⚠️ WARNING: Non-finite RMSE diff at val batch {batch_idx}; skipping accumulation.")
+                else:
+                    sse += torch.sum(diff ** 2).item()
+                    count += diff.numel()
         
         avg_loss = total_loss / len(self.val_loader)
         rmse = np.sqrt(sse / count) if count else 0
