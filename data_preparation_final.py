@@ -268,12 +268,13 @@ class M5DataPreprocessor:
         series_batch_size: int = 500,
         use_memmap: bool = True,
         memmap_dir: str = "."
-    ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame, List[str]]:
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame, List[str], dict]:
         """
         Create sliding window sequences with NaN removal.
         
         Returns:
-            X, Y arrays, feature column names, cleaned dataframe for WRMSSE, and series IDs
+            X, Y arrays, feature column names, cleaned dataframe for WRMSSE, series IDs,
+            and per-series scale factors.
         """
         print("\n" + "="*80)
         print("SEQUENCE CREATION")
@@ -301,6 +302,14 @@ class M5DataPreprocessor:
         removed_pct = (removed_rows / original_row_count * 100) if original_row_count else 0.0
         print(f"   After:  {len(df_clean):,} rows")
         print(f"   Removed: {removed_rows:,} rows ({removed_pct:.2f}%)")
+
+        print("\n1b. Computing per-series scale factors...")
+        series_scale_factors = (
+            df_clean.groupby("id", observed=True)["sales"]
+            .median()
+            .astype("float32")
+        )
+        series_scale_factors = series_scale_factors.clip(lower=1.0).to_dict()
         
         # ============ CREATE SEQUENCES ============
         print(f"\n2. Creating sequences with stride={stride}...")
@@ -348,7 +357,8 @@ class M5DataPreprocessor:
 
                 series_data = df_clean[df_clean["id"] == series_id].sort_values("date")
                 features = series_data[feature_cols].values
-                targets = np.log1p(series_data["sales"].values)
+                scale_factor = series_scale_factors.get(series_id, 1.0)
+                targets = np.log1p(series_data["sales"].values / scale_factor)
 
                 for i in range(0, len(series_data) - input_length - output_length + 1, stride):
                     X[write_idx] = features[i:i + input_length]
@@ -372,7 +382,7 @@ class M5DataPreprocessor:
         print(f"  Y shape: {Y.shape} (samples, forecast_horizon)")
         print(f"  Total sequences: {len(X):,}")
         
-        return X, Y, feature_cols, df_clean, series_id_list
+        return X, Y, feature_cols, df_clean, series_id_list, series_scale_factors
     
     
     def normalize_features(
@@ -533,7 +543,7 @@ def main():
     df = preprocessor.create_features(df)
     
     # Create sequences
-    X, Y, feature_cols, df_clean, series_ids = preprocessor.create_sequences(
+    X, Y, feature_cols, df_clean, series_ids, series_scale_factors = preprocessor.create_sequences(
         df,
         input_length=90,
         output_length=28,
@@ -562,6 +572,11 @@ def main():
     np.save("X_test.npy", X_test)
     np.save("Y_test.npy", Y_test)
     print("✓ Saved train/val/test arrays")
+    np.save("series_ids.npy", np.array(series_ids, dtype=object))
+    print("✓ Saved series IDs")
+    with open("series_scale_factors.pkl", "wb") as f:
+        pickle.dump(series_scale_factors, f)
+    print("✓ Saved series scale factors")
     
     with open("feature_cols.txt", "w") as f:
         f.write("\n".join(feature_cols))
@@ -580,6 +595,8 @@ def main():
     print("  - X_train.npy, Y_train.npy")
     print("  - X_val.npy, Y_val.npy")
     print("  - X_test.npy, Y_test.npy")
+    print("  - series_ids.npy")
+    print("  - series_scale_factors.pkl")
     print("  - feature_cols.txt")
     print("  - scaler.pkl")
     print("  - df_clean_for_wrmsse.pkl")

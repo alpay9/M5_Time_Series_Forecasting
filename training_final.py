@@ -130,7 +130,9 @@ class Trainer:
         model_name='model',
         precision='fp16',
         grad_clip_max_norm=5.0,
-        grad_clip_enabled=True
+        grad_clip_enabled=True,
+        series_scale_factors=None,
+        series_ids=None
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -148,6 +150,8 @@ class Trainer:
             self.autocast_dtype = torch.float16
         elif self.precision == 'bf16':
             self.autocast_dtype = torch.bfloat16
+        self.series_scale_factors = series_scale_factors
+        self.series_ids = series_ids
         
         # Optimizer with weight decay
         self.optimizer = torch.optim.AdamW(
@@ -187,6 +191,19 @@ class Trainer:
             'lr': [],
             'grad_norm': []
         }
+
+    def _inverse_transform_targets(self, values: np.ndarray) -> np.ndarray:
+        if self.series_scale_factors is None or self.series_ids is None:
+            return np.expm1(values)
+        if len(values) != len(self.series_ids):
+            raise ValueError(
+                "series_ids length must match number of samples for inverse scaling."
+            )
+        scale_factors = np.array(
+            [self.series_scale_factors.get(series_id, 1.0) for series_id in self.series_ids],
+            dtype=np.float32
+        )
+        return np.expm1(values) * scale_factors[:, None]
         
     def _compute_grad_norm(self):
         """Compute total gradient norm for monitoring."""
@@ -338,15 +355,17 @@ class Trainer:
         
         predictions_all = np.concatenate(predictions_all)
         targets_all = np.concatenate(targets_all)
-        predictions_unscaled = np.expm1(predictions_all)
-        targets_unscaled = np.expm1(targets_all)
+        predictions_unscaled = self._inverse_transform_targets(predictions_all)
+        targets_unscaled = self._inverse_transform_targets(targets_all)
         
         rmse = np.sqrt(mean_squared_error(targets_unscaled, predictions_unscaled))
         
         return {
             'rmse': rmse,
             'predictions': predictions_all,
-            'targets': targets_all
+            'targets': targets_all,
+            'predictions_unscaled': predictions_unscaled,
+            'targets_unscaled': targets_unscaled
         }
     
     def train(self, epochs=50, early_stopping_patience=10):
