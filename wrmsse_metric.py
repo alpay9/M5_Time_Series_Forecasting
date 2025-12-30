@@ -15,7 +15,7 @@ Author: CS 415 Deep Learning Project Team
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Iterable, List, Tuple, Any
 import warnings
 
 
@@ -44,6 +44,9 @@ class WRMSSECalculator:
         print("INITIALIZING WRMSSE CALCULATOR")
         print("="*80)
         
+        self.aggregation_levels = self._get_aggregation_levels()
+        self.series_id_to_agg_ids = self._build_series_id_to_agg_ids()
+
         # Calculate scale factors (denominator for RMSSE)
         self._calculate_scale_factors()
         
@@ -51,37 +54,173 @@ class WRMSSECalculator:
         self._calculate_weights()
         
         print("✓ WRMSSE calculator ready")
+
+    def _get_aggregation_levels(self) -> List[Tuple[str, List[str]]]:
+        return [
+            ("total", []),
+            ("state", ["state_id"]),
+            ("store", ["store_id"]),
+            ("category", ["cat_id"]),
+            ("department", ["dept_id"]),
+            ("item", ["item_id"]),
+            ("state_category", ["state_id", "cat_id"]),
+            ("state_department", ["state_id", "dept_id"]),
+            ("store_category", ["store_id", "cat_id"]),
+            ("store_department", ["store_id", "dept_id"]),
+            ("state_item", ["state_id", "item_id"]),
+            ("store_item", ["store_id", "item_id"]),
+        ]
+
+    def _make_agg_id(self, level_name: str, group_key: Any) -> str:
+        if isinstance(group_key, tuple):
+            key_str = "_".join(str(value) for value in group_key)
+        else:
+            key_str = str(group_key)
+        return f"{level_name}:{key_str}"
+
+    def _build_series_id_to_agg_ids(self) -> Dict[str, List[str]]:
+        base_columns = ["id", "state_id", "store_id", "cat_id", "dept_id", "item_id"]
+        base_df = self.df[base_columns].drop_duplicates("id")
+        mapping: Dict[str, List[str]] = {}
+
+        for row in base_df.itertuples(index=False):
+            row_dict = row._asdict()
+            agg_ids: List[str] = []
+            for level_name, group_cols in self.aggregation_levels:
+                if not group_cols:
+                    agg_id = self._make_agg_id(level_name, "all")
+                else:
+                    group_key = tuple(row_dict[col] for col in group_cols)
+                    if len(group_key) == 1:
+                        group_key = group_key[0]
+                    agg_id = self._make_agg_id(level_name, group_key)
+                agg_ids.append(agg_id)
+            mapping[row_dict["id"]] = agg_ids
+
+        return mapping
+
+    def _get_training_masks(self) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+        df_sorted = self.df.sort_values(["id", "date"])
+        series_index = df_sorted.groupby("id").cumcount()
+
+        if self.train_end_day:
+            training_mask = series_index < self.train_end_day
+            train_cutoff = self.train_end_day
+        else:
+            series_sizes = df_sorted.groupby("id")["sales"].transform("size")
+            train_cutoff = (series_sizes * 0.7).astype(int)
+            training_mask = series_index < train_cutoff
+
+        last_28_mask = training_mask & (series_index >= (train_cutoff - 28))
+
+        return df_sorted, training_mask, last_28_mask
+
+    def _calculate_aggregated_scales(self, df: pd.DataFrame) -> pd.Series:
+        scale_factors: Dict[str, float] = {}
+
+        for level_name, group_cols in self.aggregation_levels:
+            if group_cols:
+                grouped = df.groupby(group_cols + ["date"], dropna=False)["sales"].sum().reset_index()
+                for group_key, group_df in grouped.groupby(group_cols, dropna=False):
+                    series = group_df.sort_values("date")["sales"]
+                    diff_sq = series.diff() ** 2
+                    scale = diff_sq.mean()
+                    agg_id = self._make_agg_id(level_name, group_key)
+                    scale_factors[agg_id] = scale
+            else:
+                total_series = df.groupby("date")["sales"].sum().sort_index()
+                diff_sq = total_series.diff() ** 2
+                scale_factors[self._make_agg_id(level_name, "all")] = diff_sq.mean()
+
+        return pd.Series(scale_factors)
+
+    def _calculate_aggregated_dollar_sales(self, df: pd.DataFrame) -> Dict[str, float]:
+        dollar_sales: Dict[str, float] = {}
+
+        for level_name, group_cols in self.aggregation_levels:
+            if group_cols:
+                grouped = df.groupby(group_cols, dropna=False)["dollar_sales"].sum()
+                for group_key, total in grouped.items():
+                    agg_id = self._make_agg_id(level_name, group_key)
+                    dollar_sales[agg_id] = max(float(total), 0.01)
+            else:
+                total = df["dollar_sales"].sum()
+                dollar_sales[self._make_agg_id(level_name, "all")] = max(float(total), 0.01)
+
+        return dollar_sales
+
+    def build_aggregated_series(
+        self,
+        df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, pd.Series]:
+        """
+        Build the official 12 aggregation levels as time series.
+
+        Args:
+            df: Optional dataframe to aggregate. Defaults to full dataframe.
+
+        Returns:
+            Dictionary of aggregated series keyed by level/group id.
+        """
+        df_use = self.df if df is None else df
+        aggregated_series: Dict[str, pd.Series] = {}
+
+        for level_name, group_cols in self.aggregation_levels:
+            if group_cols:
+                grouped = df_use.groupby(group_cols + ["date"], dropna=False)["sales"].sum().reset_index()
+                for group_key, group_df in grouped.groupby(group_cols, dropna=False):
+                    series = group_df.sort_values("date").set_index("date")["sales"]
+                    agg_id = self._make_agg_id(level_name, group_key)
+                    aggregated_series[agg_id] = series
+            else:
+                series = df_use.groupby("date")["sales"].sum().sort_index()
+                aggregated_series[self._make_agg_id(level_name, "all")] = series
+
+        return aggregated_series
+
+    def _aggregate_predictions_actuals(
+        self,
+        predictions: np.ndarray,
+        actuals: np.ndarray,
+        series_ids: np.ndarray
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        aggregated_predictions: Dict[str, np.ndarray] = {}
+        aggregated_actuals: Dict[str, np.ndarray] = {}
+
+        for pred, act, series_id in zip(predictions, actuals, series_ids):
+            agg_ids = self.series_id_to_agg_ids.get(series_id)
+            if not agg_ids:
+                continue
+            for agg_id in agg_ids:
+                if agg_id not in aggregated_predictions:
+                    aggregated_predictions[agg_id] = pred.astype(np.float64).copy()
+                    aggregated_actuals[agg_id] = act.astype(np.float64).copy()
+                else:
+                    aggregated_predictions[agg_id] += pred
+                    aggregated_actuals[agg_id] += act
+
+        return aggregated_predictions, aggregated_actuals
     
     
     def _calculate_scale_factors(self):
         """
         Calculate scale factor for each series.
         
-        Scale = average absolute first difference over training period.
+        Scale = mean squared first difference over training period.
         This normalizes errors by the typical variation in each series.
         """
         print("\nCalculating scale factors...")
 
-        df_sorted = self.df.sort_values(['id', 'date'])
-        series_index = df_sorted.groupby('id').cumcount()
-
-        if self.train_end_day:
-            training_mask = series_index < self.train_end_day
-        else:
-            series_sizes = df_sorted.groupby('id')['sales'].transform('size')
-            n_train = (series_sizes * 0.7).astype(int)
-            training_mask = series_index < n_train
-
+        df_sorted, training_mask, _ = self._get_training_masks()
         training_df = df_sorted.loc[training_mask]
 
-        diffs = training_df.groupby('id')['sales'].diff().abs()
-        scale_series = diffs.groupby(training_df['id']).mean()
+        scale_series = self._calculate_aggregated_scales(training_df)
         scale_series = scale_series.fillna(1.0).clip(lower=0.1)
 
         self.scale_factors = scale_series.to_dict()
 
         scale_values = list(scale_series.values)
-        print(f"  ✓ Calculated scale factors for {len(self.scale_factors)} series")
+        print(f"  ✓ Calculated scale factors for {len(self.scale_factors)} aggregated series")
         print(f"  Scale factor range: [{min(scale_values):.4f}, {max(scale_values):.4f}]")
         print(f"  Scale factor mean: {np.mean(scale_values):.4f}")
     
@@ -94,28 +233,31 @@ class WRMSSECalculator:
         This ensures the model focuses on items that matter most financially.
         """
         print("\nCalculating dollar-based weights...")
-        
-        # Calculate total dollar sales per series
-        dollar_sales = {}
-        
-        for series_id in self.df['id'].unique():
-            series_data = self.df[self.df['id'] == series_id]
-            
-            # Total dollars = sum(sales * price)
-            total_dollars = (series_data['sales'].astype(np.float64) * 
-                           series_data['sell_price'].astype(np.float64)).sum()
-            dollar_sales[series_id] = max(total_dollars, 0.01)  # Avoid zero
-        
+
+        df_sorted, _, last_28_mask = self._get_training_masks()
+        last_28_df = df_sorted.loc[last_28_mask].copy()
+        last_28_df['dollar_sales'] = (
+            last_28_df['sales'].astype(np.float64)
+            * last_28_df['sell_price'].astype(np.float64)
+        )
+
+        dollar_sales = self._calculate_aggregated_dollar_sales(last_28_df)
+
         # Convert to weights (normalize to sum to 1)
         total_dollars_all = sum(dollar_sales.values())
-        
-        self.weights = {
-            series_id: dollars / total_dollars_all
-            for series_id, dollars in dollar_sales.items()
-        }
+
+        if total_dollars_all == 0:
+            warnings.warn("Total dollar sales are zero; defaulting to uniform weights.")
+            uniform_weight = 1.0 / max(len(dollar_sales), 1)
+            self.weights = {series_id: uniform_weight for series_id in dollar_sales.keys()}
+        else:
+            self.weights = {
+                series_id: dollars / total_dollars_all
+                for series_id, dollars in dollar_sales.items()
+            }
         
         weight_values = list(self.weights.values())
-        print(f"  ✓ Calculated weights for {len(self.weights)} series")
+        print(f"  ✓ Calculated weights for {len(self.weights)} aggregated series")
         print(f"  Total dollar sales: ${total_dollars_all:,.2f}")
         print(f"  Weight range: [{min(weight_values):.6f}, {max(weight_values):.6f}]")
     
@@ -132,27 +274,23 @@ class WRMSSECalculator:
         RMSSE = RMSE / scale_factor
         
         Args:
-            predictions: (n_samples, forecast_horizon)
-            actuals: (n_samples, forecast_horizon)
-            series_ids: (n_samples,) - which series each sample belongs to
+            predictions: (n_samples, forecast_horizon) for base series
+            actuals: (n_samples, forecast_horizon) for base series
+            series_ids: (n_samples,) - base series ID for each sample
             
         Returns:
-            Dictionary of series_id -> RMSSE
+            Dictionary of aggregated series_id -> RMSSE
         """
-        squared_errors = (predictions.astype(np.float64) - actuals.astype(np.float64)) ** 2
-        per_sample_mse = np.mean(squared_errors, axis=1)
-
-        unique_series, inverse = np.unique(series_ids, return_inverse=True)
-        series_error_sums = np.bincount(inverse, weights=per_sample_mse)
-        series_counts = np.bincount(inverse)
+        aggregated_predictions, aggregated_actuals = self._aggregate_predictions_actuals(
+            predictions, actuals, series_ids
+        )
 
         rmsse_dict = {}
-
-        for series_id, error_sum, count in zip(unique_series, series_error_sums, series_counts):
-            if count == 0:
-                continue
-
-            rmse = np.sqrt(error_sum / count)
+        for series_id, agg_predictions in aggregated_predictions.items():
+            agg_actuals = aggregated_actuals[series_id]
+            squared_errors = (agg_predictions.astype(np.float64) - agg_actuals.astype(np.float64)) ** 2
+            mse = np.mean(squared_errors)
+            rmse = np.sqrt(mse)
             scale = self.scale_factors.get(series_id, 1.0)
             rmsse_dict[series_id] = rmse / scale
 
